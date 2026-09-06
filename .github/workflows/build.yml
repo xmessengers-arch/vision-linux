@@ -3,8 +3,6 @@ name: Build Vision Linux ISO
 on:
   push:
     branches: [main, master]
-  pull_request:
-    branches: [main, master]
   workflow_dispatch:
 
 jobs:
@@ -36,6 +34,19 @@ jobs:
           cp rootfs/etc/init.d/vision-init $A/etc/init.d/
           chmod +x profiles/visionlinux/customize_airootfs.sh
           cp profiles/visionlinux/customize_airootfs.sh $A/root/
+
+      - name: Debug archiso
+        run: |
+          echo "=== mkarchiso location ==="
+          command -v mkarchiso
+          echo "=== mkarchiso script head ==="
+          head -50 "$(command -v mkarchiso)"
+          echo "=== profile ls ==="
+          ls -la profiles/visionlinux/
+          echo "=== profiledef ==="
+          cat profiles/visionlinux/profiledef.sh
+          echo "=== pwd ==="
+          pwd
 
       - name: Build ISO
         run: mkarchiso -v -w work -o build profiles/visionlinux
