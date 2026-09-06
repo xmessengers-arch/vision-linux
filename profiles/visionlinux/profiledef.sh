@@ -2,6 +2,7 @@
 
 profile_archiso_version=90
 profile_type="baseline"
+profile_basedir="profiles/visionlinux"
 
 iso_publisher="Vision Linux <team@visionlinux.dev>"
 iso_application="Vision Linux"
