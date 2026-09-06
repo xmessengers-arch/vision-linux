@@ -49,9 +49,14 @@ jobs:
           cp rootfs/etc/init.d/vision-init ${AIROOTFS}/etc/init.d/
           
           chmod +x profiles/visionlinux/customize_airootfs.sh
+          
+          ls -la profiles/visionlinux/
+          cat profiles/visionlinux/profiledef.sh
 
       - name: Build ISO
-        run: mkarchiso -v -w work -o build profiles/visionlinux
+        run: |
+          cd profiles/visionlinux
+          mkarchiso -v -w ../../work -o ../../build .
 
       - name: Upload ISO artifact
         uses: actions/upload-artifact@v4
