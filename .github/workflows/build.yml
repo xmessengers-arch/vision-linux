@@ -12,51 +12,64 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: archlinux:latest
+      options: --privileged
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Install dependencies
+        shell: bash
         run: |
           pacman -Syu --noconfirm
           pacman -S --noconfirm archiso python python-cryptography git
 
-      - name: Generate signing keys
+      - name: Generate keys
+        shell: bash
         run: python3 keys/generate-keys.py --out-dir keys
 
       - name: Prepare rootfs
+        shell: bash
         run: |
           PROFILE_DIR=profiles/visionlinux
           AIROOTFS=${PROFILE_DIR}/airootfs
-          
           mkdir -p ${AIROOTFS}/usr/local/bin
           mkdir -p ${AIROOTFS}/opt/visionlinux/nickman
           mkdir -p ${AIROOTFS}/opt/visionlinux/setup
           mkdir -p ${AIROOTFS}/etc/visionlinux/keys
           mkdir -p ${AIROOTFS}/etc/init.d
-          
+          mkdir -p ${AIROOTFS}/root
           cp bin/open ${AIROOTFS}/usr/local/bin/
           cp bin/vision-shell ${AIROOTFS}/usr/local/bin/
           cp bin/nock ${AIROOTFS}/usr/local/bin/
           cp bin/timeQmi ${AIROOTFS}/usr/local/bin/
           cp bin/wi-fi ${AIROOTFS}/usr/local/bin/
           chmod +x ${AIROOTFS}/usr/local/bin/*
-          
           cp nickman/*.py ${AIROOTFS}/opt/visionlinux/nickman/
           cp setup/vision-setup.py ${AIROOTFS}/opt/visionlinux/setup/
           cp keys/*.pub ${AIROOTFS}/etc/visionlinux/keys/ 2>/dev/null || true
           cp rootfs/etc/init.d/vision-init ${AIROOTFS}/etc/init.d/
-          
           chmod +x profiles/visionlinux/customize_airootfs.sh
-          
+          cp profiles/visionlinux/customize_airootfs.sh ${AIROOTFS}/root/
+
+      - name: Debug profile
+        shell: bash
+        run: |
+          echo "=== Profile dir ==="
           ls -la profiles/visionlinux/
+          echo "=== profiledef.sh ==="
           cat profiles/visionlinux/profiledef.sh
+          echo "=== airootfs ==="
+          ls -laR profiles/visionlinux/airootfs/ | head -30
+          echo "=== mkarchiso location ==="
+          which mkarchiso
+          echo "=== mkarchiso version ==="
+          mkarchiso -v 2>&1 || true
 
       - name: Build ISO
+        shell: bash
         run: |
-          cd profiles/visionlinux
-          mkarchiso -v -w ../../work -o ../../build .
+          mkarchiso -v -w work -o build profiles/visionlinux
 
       - name: Upload ISO artifact
         uses: actions/upload-artifact@v4
