@@ -17,12 +17,15 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install deps
+        shell: bash
         run: pacman -Syu --noconfirm && pacman -S --noconfirm archiso python python-cryptography git
 
       - name: Generate keys
+        shell: bash
         run: python3 keys/generate-keys.py --out-dir keys
 
       - name: Prepare rootfs
+        shell: bash
         run: |
           A=profiles/visionlinux/airootfs
           mkdir -p $A/usr/local/bin $A/opt/visionlinux/nickman $A/opt/visionlinux/setup $A/etc/visionlinux/keys $A/etc/init.d $A/root
@@ -35,20 +38,8 @@ jobs:
           chmod +x profiles/visionlinux/customize_airootfs.sh
           cp profiles/visionlinux/customize_airootfs.sh $A/root/
 
-      - name: Debug archiso
-        run: |
-          echo "=== mkarchiso location ==="
-          command -v mkarchiso
-          echo "=== mkarchiso script head ==="
-          head -50 "$(command -v mkarchiso)"
-          echo "=== profile ls ==="
-          ls -la profiles/visionlinux/
-          echo "=== profiledef ==="
-          cat profiles/visionlinux/profiledef.sh
-          echo "=== pwd ==="
-          pwd
-
       - name: Build ISO
+        shell: bash
         run: mkarchiso -v -w work -o build profiles/visionlinux
 
       - name: Upload ISO
