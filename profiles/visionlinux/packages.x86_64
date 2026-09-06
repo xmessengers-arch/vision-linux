@@ -5,7 +5,7 @@
 base
 linux-lts
 linux-lts-headers
-firmware
+linux-firmware
 sudo
 mkinitcpio
 mkinitcpio-archiso
@@ -25,12 +25,12 @@ gzip
 python
 python-gobject
 python-cryptography
-python-nacl
+python-pynacl
 
 # ---- Wayland compositor (for GUI apps via Shift+Tab) ----
 labwc
 wlr-randr
-xwayland
+xorg-xwayland
 
 # ---- GTK4 (for GUI: wi-fi, setup wizard) ----
 gtk4
@@ -39,13 +39,12 @@ libadwaita
 # ---- Network ----
 networkmanager
 nftables
-iwctl
+iwd
 wpa_supplicant
 dhcpcd
 
 # ---- Bootloader ----
 syslinux
-systemd-boot
 efibootmgr
 
 # ---- System utilities ----
@@ -57,4 +56,3 @@ curl
 
 # ---- Security ----
 polkit
-pkexec
