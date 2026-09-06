@@ -1,0 +1,77 @@
+name: Build Vision Linux ISO
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm archiso python python-cryptography git
+
+      - name: Generate signing keys
+        run: |
+          python3 keys/generate-keys.py --out-dir keys
+
+      - name: Prepare rootfs
+        run: |
+          PROFILE_DIR=profiles/visionlinux
+          AIROOTFS=$PROFILE_DIR/airootfs
+          
+          # Create directories
+          mkdir -p $AIROOTFS/usr/local/bin
+          mkdir -p $AIROOTFS/opt/visionlinux/nickman
+          mkdir -p $AIROOTFS/opt/visionlinux/setup
+          mkdir -p $AIROOTFS/etc/visionlinux/keys
+          mkdir -p $AIROOTFS/etc/init.d
+          
+          # Copy bin/ commands
+          cp bin/open $AIROOTFS/usr/local/bin/
+          cp bin/vision-shell $AIROOTFS/usr/local/bin/
+          cp bin/nock $AIROOTFS/usr/local/bin/
+          cp bin/timeQmi $AIROOTFS/usr/local/bin/
+          cp bin/wi-fi $AIROOTFS/usr/local/bin/
+          chmod +x $AIROOTFS/usr/local/bin/*
+          
+          # Copy nickman
+          cp nickman/*.py $AIROOTFS/opt/visionlinux/nickman/
+          
+          # Copy setup wizard
+          cp setup/vision-setup.py $AIROOTFS/opt/visionlinux/setup/
+          
+          # Copy public keys
+          cp keys/*.pub $AIROOTFS/etc/visionlinux/keys/ 2>/dev/null || true
+          
+          # Copy init script
+          cp rootfs/etc/init.d/vision-init $AIROOTFS/etc/init.d/
+
+      - name: Build ISO
+        run: |
+          chmod +x profiles/visionlinux/customize_airootfs.sh
+          mkarchiso -w work -o build profiles/visionlinux
+
+      - name: Upload ISO artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vision-linux-iso
+          path: build/*.iso
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: ISO info
+        run: |
+          ls -lh build/*.iso
+          echo "ISO built successfully!"

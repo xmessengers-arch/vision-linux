@@ -1,0 +1,51 @@
+# Core packages for Vision Linux
+# Minimal installation — USB-only distribution
+
+# ---- Base system ----
+base
+linux-lts
+linux-lts-headers
+firmware
+sudo
+
+# ---- File system tools ----
+dosfstools
+e2fsprogs
+parted
+util-linux
+
+# ---- Compression ----
+zstd
+xz
+gzip
+
+# ---- Python (for nickman, setup, utilities) ----
+python
+python-gobject
+python-cryptography
+python-nacl
+
+# ---- GTK4 (for GUI: wi-fi, setup wizard) ----
+gtk4
+libadwaita
+
+# ---- Network ----
+networkmanager
+nftables
+iwctl
+wpa_supplicant
+dhcpcd
+
+# ---- Bootloader ----
+limine
+
+# ---- System utilities ----
+bash-completion
+tmux
+git
+wget
+curl
+
+# ---- Security ----
+polkit
+pkexec

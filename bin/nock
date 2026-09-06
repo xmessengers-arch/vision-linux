@@ -1,0 +1,99 @@
+#!/usr/bin/env python3
+"""nock -program — List installed programs on Vision Linux.
+
+Usage:
+    nock -program          List all installed NPM packages
+    nock -program <name>   Search for a specific package
+    nock --help            Show this help
+"""
+
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+REGISTRY = Path("/var/lib/visionlinux/npm/registry.json")
+APPS_DIR = Path("/opt/visionlinux/apps")
+DESKTOP_DIR = Path("/usr/share/applications")
+
+
+def get_installed() -> list[dict]:
+    """Read from registry or scan apps directory."""
+    # Try registry first
+    try:
+        data = json.loads(REGISTRY.read_text())
+        if data:
+            return data
+    except (OSError, json.JSONDecodeError):
+        pass
+
+    # Fallback: scan installed apps
+    apps = []
+    if APPS_DIR.exists():
+        for d in sorted(APPS_DIR.iterdir()):
+            if d.is_dir():
+                manifest_path = d / "manifest.json"
+                info = {"name": d.name, "version": "?", "display_name": d.name}
+                try:
+                    m = json.loads(manifest_path.read_text())
+                    info["version"] = m.get("version", "?")
+                    info["display_name"] = m.get("display_name", d.name)
+                except (OSError, json.JSONDecodeError):
+                    pass
+                apps.append(info)
+    return apps
+
+
+def find_desktop(name: str) -> str | None:
+    """Find .desktop file for an app."""
+    for d in [DESKTOP_DIR, Path.home() / ".local/share/applications"]:
+        desktop = d / f"{name}.desktop"
+        if desktop.exists():
+            return str(desktop)
+    return None
+
+
+def main() -> int:
+    args = sys.argv[1:]
+
+    if "--help" in args or "-h" in args:
+        print(__doc__)
+        return 0
+
+    search = None
+    if args:
+        search = args[0].lower()
+
+    apps = get_installed()
+
+    if not apps:
+        print("No installed programs.")
+        print("Install programs with: nickman install <file.npm>")
+        return 0
+
+    if search:
+        filtered = [a for a in apps if search in a["name"].lower()
+                    or search in a.get("display_name", "").lower()]
+        if not filtered:
+            print(f"No programs matching '{search}'.")
+            return 1
+        apps = filtered
+
+    # Print table
+    print(f"{'Name':<25} {'Version':<12} {'Display Name':<30} {'Desktop'}")
+    print("-" * 90)
+    for app in apps:
+        name = app["name"]
+        ver = app.get("version", "?")
+        display = app.get("display_name", name)
+        desktop = find_desktop(name)
+        has_desktop = "yes" if desktop else "-"
+        print(f"{name:<25} {ver:<12} {display:<30} {has_desktop}")
+
+    print(f"\nTotal: {len(apps)} program(s)")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

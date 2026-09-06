@@ -1,0 +1,150 @@
+#!/usr/bin/env python3
+"""timeQmi — Persistent time display for Vision Linux.
+
+Usage:
+    timeQmi               Show current time in the right corner
+    timeQmi --daemon      Run as persistent overlay (stays visible while scrolling)
+    timeQmi --off         Turn off the time overlay
+
+The time display stays in the right corner of the terminal and persists
+even when scrolling through terminal output. This is achieved by writing
+to a fixed position using ANSI escape sequences.
+"""
+
+from __future__ import annotations
+
+import sys
+import time
+import signal
+import os
+from datetime import datetime
+
+
+# ANSI escape codes
+ESC = "\033"
+MOVE_RIGHT = ESC + "[{}C"       # Move cursor right N columns
+SAVE_POS = ESC + "[s"           # Save cursor position
+RESTORE_POS = ESC + "[u"        # Restore cursor position
+HIDE_CURSOR = ESC + "[?25l"     # Hide cursor
+SHOW_CURSOR = ESC + "[?25h"     # Show cursor
+CLEAR_LINE = ESC + "[2K"        # Clear entire line
+BOLD = ESC + "[1m"
+RESET = ESC + "[0m"
+FG_CYAN = ESC + "[36m"
+FG_WHITE = ESC + "[37m"
+BG_DARK = ESC + "[40m"
+
+OVERLAY_FILE = "/tmp/timeQmi_overlay"
+OVERLAY_PID_FILE = "/tmp/timeQmi.pid"
+
+
+def get_terminal_width() -> int:
+    try:
+        return os.get_terminal_size().columns
+    except OSError:
+        return 80
+
+
+def format_time() -> str:
+    now = datetime.now()
+    return now.strftime("%H:%M:%S")
+
+
+def format_date() -> str:
+    now = datetime.now()
+    return now.strftime("%d.%m.%Y")
+
+
+def write_overlay() -> None:
+    """Write time to the fixed right position in terminal."""
+    width = get_terminal_width()
+    time_str = format_time()
+    date_str = format_date()
+    overlay = f"{FG_CYAN}{BOLD}{time_str}{RESET} {FG_WHITE}{date_str}{RESET}"
+    # ANSI visible length (without escape codes) is roughly 17 chars
+    visible_len = len(time_str) + 1 + len(date_str)
+    padding = max(0, width - visible_len - 1)
+
+    # Move to right edge, write time
+    sys.stdout.write(SAVE_POS)
+    sys.stdout.write(MOVE_RIGHT.format(padding))
+    sys.stdout.write(CLEAR_LINE)
+    sys.stdout.write(overlay)
+    sys.stdout.write(RESTORE_POS)
+    sys.stdout.flush()
+
+
+def daemon_mode() -> None:
+    """Run as daemon, continuously updating the time overlay."""
+    # Write PID
+    with open(OVERLAY_PID_FILE, "w") as f:
+        f.write(str(os.getpid()))
+
+    # Set terminal title
+    sys.stdout.write(f"{ESC}]0;Vision Linux{ESC}\\")
+
+    print(HIDE_CURSOR, end="")
+
+    running = True
+    def handler(sig, frame):
+        nonlocal running
+        running = False
+    signal.signal(signal.SIGTERM, handler)
+    signal.signal(signal.SIGINT, handler)
+
+    print("timeQmi daemon started. Press Ctrl+C to stop.", file=sys.stderr)
+
+    try:
+        while running:
+            write_overlay()
+            time.sleep(1)
+    finally:
+        print(SHOW_CURSOR, end="")
+        sys.stdout.flush()
+        # Cleanup
+        try:
+            os.unlink(OVERLAY_PID_FILE)
+        except OSError:
+            pass
+        print("\ntimeQmi stopped.", file=sys.stderr)
+
+
+def stop_daemon() -> None:
+    """Stop the running timeQmi daemon."""
+    try:
+        with open(OVERLAY_PID_FILE) as f:
+            pid = int(f.read().strip())
+        os.kill(pid, signal.SIGTERM)
+        print(f"Stopped timeQmi (PID: {pid})")
+    except (FileNotFoundError, ValueError, ProcessLookupError, PermissionError):
+        print("timeQmi is not running.")
+
+
+def show_once() -> None:
+    """Show time once in the current terminal position."""
+    width = get_terminal_width()
+    time_str = format_time()
+    date_str = format_date()
+    visible_len = len(time_str) + 1 + len(date_str)
+    padding = max(0, width - visible_len - 1)
+
+    output = " " * padding + f"{FG_CYAN}{BOLD}{time_str}{RESET} {FG_WHITE}{date_str}{RESET}"
+    print(output)
+
+
+def main() -> int:
+    args = sys.argv[1:]
+
+    if "--daemon" in args or "-d" in args:
+        daemon_mode()
+        return 0
+    elif "--off" in args or "-x" in args:
+        stop_daemon()
+        return 0
+    else:
+        show_once()
+        return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

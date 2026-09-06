@@ -1,0 +1,320 @@
+#!/usr/bin/env python3
+"""wi-fi — Wi-Fi connection utility for Vision Linux.
+
+Usage:
+    wi-fi              Open graphical Wi-Fi selection window
+    wi-fi --status     Show current Wi-Fi status in terminal
+    wi-fi --scan       Scan available networks in terminal
+    wi-fi --connect <SSID> [password]  Connect to a network
+
+Opens a GTK4 graphical window for selecting Wi-Fi networks and entering
+passwords. If the system is connected via LAN, it auto-connects and
+reports status.
+"""
+
+from __future__ import annotations
+
+import subprocess
+import sys
+import os
+import time
+import threading
+from pathlib import Path
+
+
+def check_lan() -> bool:
+    """Check if LAN is connected."""
+    net_dir = Path("/sys/class/net")
+    if not net_dir.exists():
+        return False
+    for iface in ["eth0", "enp0s3", "enp0s8", "enp1s0"]:
+        state_file = net_dir / iface / "operstate"
+        if state_file.exists():
+            state = state_file.read_text().strip()
+            if state == "up":
+                return True
+    return False
+
+
+def get_wifi_status() -> str:
+    """Get current Wi-Fi status."""
+    try:
+        r = subprocess.run(["iwctl", "station", "wlan0", "show"],
+                          capture_output=True, text=True, timeout=5)
+        if r.returncode == 0:
+            return r.stdout
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    try:
+        r = subprocess.run(["nmcli", "-t", "-f", "active,ssid", "dev", "wifi"],
+                          capture_output=True, text=True, timeout=5)
+        if r.returncode == 0:
+            for line in r.stdout.strip().split("\n"):
+                if line.startswith("yes:"):
+                    ssid = line.split(":", 1)[1]
+                    return f"Connected to: {ssid}"
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    return "Wi-Fi status: unknown (iwctl/nmcli not available)"
+
+
+def scan_networks() -> list[str]:
+    """Scan available Wi-Fi networks."""
+    networks = []
+    try:
+        r = subprocess.run(["iwctl", "station", "wlan0", "scan"],
+                          capture_output=True, text=True, timeout=10)
+        if r.returncode == 0:
+            r2 = subprocess.run(["iwctl", "station", "wlan0", "get-networks"],
+                               capture_output=True, text=True, timeout=5)
+            if r2.returncode == 0:
+                for line in r2.stdout.strip().split("\n")[1:]:
+                    parts = line.split()
+                    if parts:
+                        networks.append(parts[0])
+                return networks
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    try:
+        r = subprocess.run(["nmcli", "-t", "-f", "SSID", "dev", "wifi"],
+                          capture_output=True, text=True, timeout=10)
+        if r.returncode == 0:
+            seen = set()
+            for line in r.stdout.strip().split("\n"):
+                ssid = line.strip()
+                if ssid and ssid not in seen:
+                    networks.append(ssid)
+                    seen.add(ssid)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    return networks
+
+
+def connect_network(ssid: str, password: str = "") -> bool:
+    """Connect to a Wi-Fi network."""
+    try:
+        if password:
+            cmd = ["iwctl", "station", "wlan0", "connect", ssid, "--passphrase", password]
+        else:
+            cmd = ["iwctl", "station", "wlan0", "connect", ssid]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if r.returncode == 0:
+            return True
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    try:
+        if password:
+            cmd = ["nmcli", "dev", "wifi", "connect", ssid, "password", password]
+        else:
+            cmd = ["nmcli", "dev", "wifi", "connect", ssid]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if r.returncode == 0:
+            return True
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    return False
+
+
+def open_gui() -> None:
+    """Open graphical Wi-Fi selection window."""
+    try:
+        import gi
+        gi.require_version("Gtk", "4.0")
+        gi.require_version("Adw", "1")
+        from gi.repository import Adw, Gtk, GLib
+
+        class WiFiWindow(Adw.Application):
+            def __init__(self):
+                super().__init__(application_id="org.visionlinux.wifi")
+                self.connect("activate", self.on_activate)
+
+            def on_activate(self, app):
+                self.win = Adw.ApplicationWindow(application=app)
+                self.win.set_title("Vision Linux — Wi-Fi")
+                self.win.set_default_size(450, 500)
+
+                main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+                main_box.set_margin_top(16)
+                main_box.set_margin_bottom(16)
+                main_box.set_margin_start(16)
+                main_box.set_margin_end(16)
+
+                self.status_label = Gtk.Label(label="Checking connection...")
+                self.status_label.set_halign(Gtk.Align.START)
+                main_box.append(self.status_label)
+
+                if check_lan():
+                    self.status_label.set_text("LAN connected — Internet available via Ethernet")
+                    self.status_label.add_css_class("success")
+                    main_box.append(self.status_label)
+                    self.win.set_content(main_box)
+                    self.win.present()
+                    return
+
+                scan_btn = Gtk.Button(label="Scan Networks")
+                scan_btn.add_css_class("suggested-action")
+                scan_btn.connect("clicked", self.on_scan)
+                main_box.append(scan_btn)
+
+                self.network_list = Gtk.ListBox()
+                self.network_list.set_selection_mode(Gtk.SelectionMode.SINGLE)
+                scrolled = Gtk.ScrolledWindow()
+                scrolled.set_child(self.network_list)
+                scrolled.set_vexpand(True)
+                main_box.append(scrolled)
+
+                pass_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+                self.pass_entry = Gtk.PasswordEntry()
+                self.pass_entry.set_show_peek_icon(True)
+                self.pass_entry.set_placeholder_text("Wi-Fi password...")
+                self.pass_entry.set_hexpand(True)
+                pass_box.append(self.pass_entry)
+
+                connect_btn = Gtk.Button(label="Connect")
+                connect_btn.add_css_class("suggested-action")
+                connect_btn.connect("clicked", self.on_connect)
+                pass_box.append(connect_btn)
+
+                main_box.append(pass_box)
+                self.win.set_content(main_box)
+                self.win.present()
+
+                self.on_scan(None)
+
+            def on_scan(self, btn):
+                self.status_label.set_text("Scanning...")
+                self.network_list.set_sensitive(False)
+
+                def _do_scan():
+                    nets = scan_networks()
+                    GLib.idle_add(self._populate_list, nets)
+
+                threading.Thread(target=_do_scan, daemon=True).start()
+
+            def _populate_list(self, nets):
+                while True:
+                    row = self.network_list.get_row_at_index(0)
+                    if row is None:
+                        break
+                    self.network_list.remove(row)
+
+                if not nets:
+                    self.status_label.set_text("No networks found")
+                    self.network_list.set_sensitive(True)
+                    return
+
+                self.status_label.set_text(f"Found {len(nets)} network(s)")
+                for ssid in nets:
+                    row = Gtk.ListBoxRow()
+                    label = Gtk.Label(label=f"  {ssid}")
+                    label.set_halign(Gtk.Align.START)
+                    row.set_child(label)
+                    row._ssid = ssid
+                    self.network_list.append(row)
+
+                self.network_list.set_sensitive(True)
+
+            def on_connect(self, btn):
+                row = self.network_list.get_selected_row()
+                if row is None:
+                    self.status_label.set_text("Select a network first")
+                    return
+
+                ssid = row._ssid
+                password = self.pass_entry.get_text()
+
+                self.status_label.set_text(f"Connecting to {ssid}...")
+                btn.set_sensitive(False)
+
+                def _do_connect():
+                    ok = connect_network(ssid, password)
+                    if ok:
+                        GLib.idle_add(self.status_label.set_text,
+                                      f"Connected to {ssid}")
+                        GLib.idle_add(self.status_label.add_css_class, "success")
+                    else:
+                        GLib.idle_add(self.status_label.set_text,
+                                      f"Failed to connect to {ssid}")
+                        GLib.idle_add(self.status_label.add_css_class, "error")
+                    GLib.idle_add(btn.set_sensitive, True)
+
+                threading.Thread(target=_do_connect, daemon=True).start()
+
+        app = WiFiWindow()
+        app.run([])
+
+    except ImportError:
+        print("GTK4/Adw not available. Using terminal mode.")
+        print()
+        networks = scan_networks()
+        if not networks:
+            print("No Wi-Fi networks found.")
+            return
+        print("Available networks:")
+        for i, ssid in enumerate(networks, 1):
+            print(f"  {i}. {ssid}")
+        print()
+        try:
+            choice = input("Select network number (or SSID): ").strip()
+            if choice.isdigit():
+                idx = int(choice) - 1
+                if 0 <= idx < len(networks):
+                    ssid = networks[idx]
+                else:
+                    print("Invalid selection.")
+                    return
+            else:
+                ssid = choice
+            password = input(f"Password for {ssid} (leave empty for open): ").strip()
+            print(f"Connecting to {ssid}...")
+            if connect_network(ssid, password):
+                print(f"Connected to {ssid}!")
+            else:
+                print(f"Failed to connect to {ssid}.")
+        except (KeyboardInterrupt, EOFError):
+            print("\nCancelled.")
+
+
+def main() -> int:
+    args = sys.argv[1:]
+
+    if "--status" in args:
+        if check_lan():
+            print("LAN connected — Internet available via Ethernet")
+            return 0
+        print(get_wifi_status())
+        return 0
+
+    if "--scan" in args:
+        if check_lan():
+            print("LAN connected — no need to scan Wi-Fi")
+            return 0
+        nets = scan_networks()
+        if not nets:
+            print("No Wi-Fi networks found.")
+            return 1
+        print("Available networks:")
+        for i, n in enumerate(nets, 1):
+            print(f"  {i}. {n}")
+        return 0
+
+    if "--connect" in args:
+        idx = args.index("--connect")
+        if idx + 1 >= len(args):
+            print("Usage: wi-fi --connect <SSID> [password]")
+            return 1
+        ssid = args[idx + 1]
+        password = args[idx + 2] if idx + 2 < len(args) else ""
+        if connect_network(ssid, password):
+            print(f"Connected to {ssid}")
+            return 0
+        else:
+            print(f"Failed to connect to {ssid}")
+            return 1
+
+    open_gui()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

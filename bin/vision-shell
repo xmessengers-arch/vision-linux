@@ -1,0 +1,128 @@
+#!/usr/bin/env bash
+# vision-shell — Vision Linux terminal shell with Shift+Tab GUI switching
+#
+# This is the main interactive shell for Vision Linux.
+# Features:
+#   - Shift+Tab: switch between terminal and running GUI apps
+#   - exit <app>: close a running GUI application
+#   - nock -program: list installed programs
+#   - Built-in commands: open, exit, nock, timeQmi, wi-fi
+
+VISION_RUNNING_APPS="/tmp/vision_running_apps"
+VISION_CONFIG_DIR="${HOME}/.config/visionlinux"
+
+mkdir -p "$VISION_CONFIG_DIR" "$(dirname "$VISION_RUNNING_APPS")"
+
+# ---- Track running GUI apps ----
+track_app() {
+    local pid=$1 name=$2
+    echo "$pid:$name:$(date +%s)" >> "$VISION_RUNNING_APPS"
+}
+
+list_running() {
+    if [ ! -f "$VISION_RUNNING_APPS" ]; then
+        echo "No GUI applications running."
+        return
+    fi
+    local found=0
+    while IFS=: read -r pid name ts; do
+        if kill -0 "$pid" 2>/dev/null; then
+            echo "  $name (PID: $pid) — running"
+            found=1
+        fi
+    done < "$VISION_RUNNING_APPS"
+    [ $found -eq 0 ] && echo "No GUI applications running."
+}
+
+kill_app() {
+    local app_name="$1"
+    if [ ! -f "$VISION_RUNNING_APPS" ]; then
+        echo "Application '$app_name' not found."
+        return 1
+    fi
+    local tmpfile=$(mktemp)
+    local found=0
+    while IFS=: read -r pid name ts; do
+        if [ "$name" = "$app_name" ] && kill -0 "$pid" 2>/dev/null; then
+            kill "$pid" 2>/dev/null
+            echo "Closed $app_name (PID: $pid)"
+            found=1
+        else
+            echo "$pid:$name:$ts" >> "$tmpfile"
+        fi
+    done < "$VISION_RUNNING_APPS"
+    mv "$tmpfile" "$VISION_RUNNING_APPS"
+    [ $found -eq 0 ] && echo "Application '$app_name' not found or already closed."
+}
+
+# ---- Switch to last GUI app ----
+switch_to_gui() {
+    if [ ! -f "$VISION_RUNNING_APPS" ]; then
+        return
+    fi
+    local target_pid="" target_name=""
+    while IFS=: read -r pid name ts; do
+        if kill -0 "$pid" 2>/dev/null; then
+            target_pid="$pid"
+            target_name="$name"
+        fi
+    done < "$VISION_RUNNING_APPS"
+    if [ -n "$target_pid" ]; then
+        echo ""
+        echo "[vision] Switching to $target_name (PID: $target_pid)"
+        if command -v wlr-ctl &>/dev/null; then
+            wlr-ctl raise "$target_name" 2>/dev/null
+        fi
+    fi
+}
+
+# ---- Create init file for bash ----
+VISION_INIT=$(mktemp /tmp/vision-shell-init.XXXXXX)
+cat > "$VISION_INIT" << 'INITEOF'
+VISION_RUNNING_APPS="/tmp/vision_running_apps"
+VISION_CONFIG_DIR="${HOME}/.config/visionlinux"
+
+# Shift+Tab handler
+__vision_switch() {
+    if [ ! -f "$VISION_RUNNING_APPS" ]; then
+        return
+    fi
+    local target_pid="" target_name=""
+    while IFS=: read -r pid name ts; do
+        if kill -0 "$pid" 2>/dev/null; then
+            target_pid="$pid"
+            target_name="$name"
+        fi
+    done < "$VISION_RUNNING_APPS"
+    if [ -n "$target_pid" ]; then
+        echo ""
+        echo "[vision] Switching to $target_name (PID: $target_pid)"
+    fi
+}
+
+# Bind Shift+Tab (ESC[Z)
+bind -x '"\e[Z": __vision_switch'
+
+# Prompt
+__vision_prompt() {
+    local USER=$(whoami)
+    local HOST="visionlinux"
+    local DIR=$(pwd)
+    DIR="${DIR/#$HOME/~}"
+    PS1="\[\033[1;32m\]${USER}@${HOST}\[\033[0m\]:\[\033[1;34m\]${DIR}\[\033[0m\]\$ "
+}
+__vision_prompt
+INITEOF
+
+# ---- Welcome banner ----
+echo "╔══════════════════════════════════════════╗"
+echo "║       Vision Linux Terminal v1.0         ║"
+echo "║  Shift+Tab — switch to GUI app          ║"
+echo "║  exit <app> — close GUI app             ║"
+echo "║  nock -program — list programs           ║"
+echo "║  open <app> — launch GUI app             ║"
+echo "╚══════════════════════════════════════════╝"
+echo ""
+
+# ---- Launch interactive bash with our init file ----
+exec bash --norc --noprofile --init-file "$VISION_INIT"

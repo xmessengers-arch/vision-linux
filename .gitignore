@@ -1,0 +1,10 @@
+*.pyc
+__pycache__/
+*.egg-info/
+dist/
+build/
+*.iso
+*.qcow2
+*.img
+*.priv
+keys/*.priv

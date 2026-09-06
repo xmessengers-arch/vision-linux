@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+# open — Launch GUI application from Vision Linux terminal
+# Usage: open <AppName> [args...]
+#
+# Finds the application by name in /opt/visionlinux/apps or /usr/bin,
+# launches it in background on the Wayland/X11 display, and tracks
+# the PID so vision-shell can manage it.
+#
+# Shift+Tab switches back to terminal. "exit <app>" in terminal closes it.
+
+APP_NAME="$1"
+shift 2>/dev/null
+
+if [ -z "$APP_NAME" ]; then
+    echo "Usage: open <AppName> [args...]"
+    echo "Examples:"
+    echo "  open Firefox"
+    echo "  open FileManager"
+    echo "  open text-editor"
+    echo ""
+    echo "Installed apps: $(nock -program 2>/dev/null | head -20)"
+    exit 1
+fi
+
+# Normalize name: lowercase for search, but keep original for display
+SEARCH_NAME=$(echo "$APP_NAME" | tr '[:upper:]' '[:lower:]')
+
+# Search paths in order
+APP_DIR="/opt/visionlinux/apps/$APP_NAME"
+APP_DIR_LOWER="/opt/visionlinux/apps/$SEARCH_NAME"
+BIN_PATH="/usr/bin/$APP_NAME"
+BIN_PATH_LOWER="/usr/bin/$SEARCH_NAME"
+
+# Resolve actual executable
+EXEC=""
+EXEC_DIR=""
+
+if [ -d "$APP_DIR" ]; then
+    # Look for entry point from manifest or common names
+    if [ -f "$APP_DIR/manifest.json" ]; then
+        ENTRY=$(python3 -c "import json; print(json.load(open('$APP_DIR/manifest.json')).get('entry',''))" 2>/dev/null)
+        if [ -n "$ENTRY" ] && [ -f "$APP_DIR/$ENTRY" ]; then
+            EXEC="$APP_DIR/$ENTRY"
+            EXEC_DIR="$APP_DIR"
+        fi
+    fi
+    # Fallback: look for bin/<name> or main.py
+    if [ -z "$EXEC" ]; then
+        for candidate in "bin/$APP_NAME" "bin/$SEARCH_NAME" "main.py" "run.sh"; do
+            if [ -f "$APP_DIR/$candidate" ]; then
+                EXEC="$APP_DIR/$candidate"
+                EXEC_DIR="$APP_DIR"
+                break
+            fi
+        done
+    fi
+elif [ -d "$APP_DIR_LOWER" ]; then
+    APP_DIR="$APP_DIR_LOWER"
+    if [ -f "$APP_DIR/manifest.json" ]; then
+        ENTRY=$(python3 -c "import json; print(json.load(open('$APP_DIR/manifest.json')).get('entry',''))" 2>/dev/null)
+        if [ -n "$ENTRY" ] && [ -f "$APP_DIR/$ENTRY" ]; then
+            EXEC="$APP_DIR/$ENTRY"
+            EXEC_DIR="$APP_DIR"
+        fi
+    fi
+    if [ -z "$EXEC" ]; then
+        for candidate in "bin/$SEARCH_NAME" "main.py" "run.sh"; do
+            if [ -f "$APP_DIR/$candidate" ]; then
+                EXEC="$APP_DIR/$candidate"
+                EXEC_DIR="$APP_DIR"
+                break
+            fi
+        done
+    fi
+fi
+
+# Check /usr/bin symlink
+if [ -z "$EXEC" ] && [ -x "$BIN_PATH" ]; then
+    EXEC="$BIN_PATH"
+elif [ -z "$EXEC" ] && [ -x "$BIN_PATH_LOWER" ]; then
+    EXEC="$BIN_PATH_LOWER"
+fi
+
+# Check if it's a desktop file reference
+if [ -z "$EXEC" ]; then
+    DESKTOP="/usr/share/applications/$APP_NAME.desktop"
+    DESKTOP_LOWER="/usr/share/applications/$SEARCH_NAME.desktop"
+    if [ -f "$DESKTOP" ]; then
+        EXEC=$(grep "^Exec=" "$DESKTOP" | head -1 | sed 's/^Exec=//' | awk '{print $1}')
+    elif [ -f "$DESKTOP_LOWER" ]; then
+        EXEC=$(grep "^Exec=" "$DESKTOP_LOWER" | head -1 | sed 's/^Exec=//' | awk '{print $1}')
+    fi
+fi
+
+if [ -z "$EXEC" ]; then
+    echo "Error: Application '$APP_NAME' not found."
+    echo "Use 'nock -program' to list installed applications."
+    exit 1
+fi
+
+# Ensure Wayland/X11 display is available
+if [ -z "$WAYLAND_DISPLAY" ] && [ -z "$DISPLAY" ]; then
+    echo "Error: No display server detected (WAYLAND_DISPLAY/DISPLAY not set)."
+    echo "Vision Linux requires a running compositor."
+    exit 1
+fi
+
+# Launch the application in background
+echo "Opening $APP_NAME..."
+cd "$EXEC_DIR" 2>/dev/null || true
+"$EXEC" "$@" &
+APP_PID=$!
+
+# Track the PID for vision-shell
+VISION_RUNNING_APPS="${VISION_RUNNING_APPS:-/tmp/vision_running_apps}"
+mkdir -p "$(dirname "$VISION_RUNNING_APPS")"
+echo "$APP_PID:$APP_NAME:$(date +%s)" >> "$VISION_RUNNING_APPS"
+
+echo "$APP_NAME started (PID: $APP_PID)"
+echo "Press Shift+Tab to switch to terminal. Type 'exit $APP_NAME' to close."

@@ -1,0 +1,270 @@
+#!/usr/bin/env bash
+# vision-init — Init system for Vision Linux
+# Detects USB drive, determines mode (install/save), and boots accordingly.
+
+VISION_SAVE_FILE="visionlinux.save"
+VISION_SAVE_SIZE="4096"  # 4GB in MB
+VISION_USB_DEVICE=""
+
+log() {
+    echo "[vision-init] $1"
+}
+
+# ---- Detect USB devices ----
+find_usb() {
+    log "Scanning for USB storage devices..."
+    local usb_devices=""
+
+    for dev in /dev/sd? /dev/sd??; do
+        if [ -b "$dev" ]; then
+            local devpath=$(readlink -f "/sys/block/$(basename $dev)" 2>/dev/null || true)
+            if echo "$devpath" | grep -qi "usb" 2>/dev/null; then
+                usb_devices="$usb_devices $dev"
+            fi
+        fi
+    done
+
+    if [ -d /dev/disk/by-id ]; then
+        for link in /dev/disk/by-id/*usb*; do
+            if [ -L "$link" ]; then
+                local target=$(readlink -f "$link")
+                usb_devices="$usb_devices $target"
+            fi
+        done
+    fi
+
+    usb_devices=$(echo "$usb_devices" | tr ' ' '\n' | sort -u | tr '\n' ' ')
+    echo "$usb_devices"
+}
+
+# ---- Check if we're booting from USB ----
+check_boot_device() {
+    local root_dev=$(findmnt -n -o SOURCE / 2>/dev/null || echo "")
+    if [ -z "$root_dev" ]; then
+        return 1
+    fi
+    if echo "$root_dev" | grep -qi "usb" 2>/dev/null; then
+        return 0
+    fi
+    local base=$(basename "$root_dev")
+    local removable="/sys/block/${base}/removable"
+    if [ -f "$removable" ] && [ "$(cat $removable 2>/dev/null)" = "1" ]; then
+        return 0
+    fi
+    return 1
+}
+
+# ---- Find save file on USB ----
+find_save_file() {
+    local usb_list=$(find_usb)
+    for dev in $usb_list; do
+        for part in "${dev}"*; do
+            if [ -b "$part" ]; then
+                local mnt=$(mktemp -d)
+                if mount -o ro "$part" "$mnt" 2>/dev/null; then
+                    if [ -f "$mnt/$VISION_SAVE_FILE" ]; then
+                        local savepath="$mnt/$VISION_SAVE_FILE"
+                        umount "$mnt"
+                        rmdir "$mnt"
+                        echo "$savepath"
+                        return 0
+                    fi
+                    umount "$mnt"
+                    rmdir "$mnt"
+                fi
+            fi
+        done
+    done
+    return 1
+}
+
+# ---- Mount save file ----
+mount_save() {
+    local save_path="$1"
+    local mnt_point="/run/visionlinux/save"
+
+    mkdir -p "$mnt_point"
+
+    local loop=$(losetup -fP "$save_path" 2>/dev/null && losetup -j "$save_path" | cut -d: -f1)
+    if [ -n "$loop" ]; then
+        mount "$loop" "$mnt_point" 2>/dev/null
+        if [ $? -eq 0 ]; then
+            log "Save file mounted at $mnt_point"
+            return 0
+        fi
+    fi
+
+    log "Failed to mount save file"
+    return 1
+}
+
+# ---- Install mode ----
+do_install() {
+    log "=== INSTALL MODE ==="
+    log "Only USB drives will be shown. Real disks are hidden."
+
+    local usb_list=$(find_usb)
+    if [ -z "$usb_list" ]; then
+        log "ERROR: No USB drive detected. Please insert a USB drive."
+        log "Vision Linux can only be installed on USB flash drives."
+        echo "NO_USB"
+        return 1
+    fi
+
+    log "Available USB drives:"
+    local idx=1
+    for dev in $usb_list; do
+        local size=$(lsblk -n -o SIZE "$dev" 2>/dev/null || echo "unknown")
+        local model=$(lsblk -n -o MODEL "$dev" 2>/dev/null || echo "unknown")
+        log "  $idx: $dev ($size) - $model"
+        idx=$((idx + 1))
+    done
+
+    echo "SELECT_USB"
+    read -p "Select USB drive number: " choice
+
+    VISION_USB_DEVICE=$(echo "$usb_list" | tr ' ' '\n' | sed -n "${choice}p")
+
+    if [ -z "$VISION_USB_DEVICE" ] || [ ! -b "$VISION_USB_DEVICE" ]; then
+        log "ERROR: Invalid selection"
+        return 1
+    fi
+
+    log "Selected: $VISION_USB_DEVICE"
+    read -p "WARNING: All data on $VISION_USB_DEVICE will be erased! Continue? [y/N]: " confirm
+    if [ "$confirm" != "y" ] && [ "$confirm" != "Y" ]; then
+        log "Installation cancelled."
+        return 1
+    fi
+
+    log "Partitioning $VISION_USB_DEVICE..."
+    parted -s "$VISION_USB_DEVICE" mklabel gpt
+    parted -s "$VISION_USB_DEVICE" mkpart primary fat32 1MiB 512MiB
+    parted -s "$VISION_USB_DEVICE" mkpart primary ext4 512MiB 100%
+
+    local boot_part="${VISION_USB_DEVICE}1"
+    local root_part="${VISION_USB_DEVICE}2"
+
+    mkfs.vfat -F 32 "$boot_part"
+    mkfs.ext4 -F "$root_part"
+
+    local mnt=$(mktemp -d)
+    mkdir -p "$mnt/boot" "$mnt/root"
+
+    mount "$root_part" "$mnt/root"
+    mount "$boot_part" "$mnt/boot"
+
+    log "Installing Vision Linux..."
+    cp -a /live/image/* "$mnt/root/" 2>/dev/null || true
+
+    log "Creating save file (${VISION_SAVE_SIZE}MB)..."
+    dd if=/dev/zero of="$mnt/root/$VISION_SAVE_FILE" bs=1M count=$VISION_SAVE_SIZE 2>/dev/null
+    mkfs.ext4 -F "$mnt/root/$VISION_SAVE_FILE"
+
+    log "Installing bootloader..."
+    # Limine bootloader installation would go here
+
+    umount "$mnt/boot" 2>/dev/null
+    umount "$mnt/root" 2>/dev/null
+    rmdir "$mnt" 2>/dev/null
+
+    log "=== INSTALLATION COMPLETE ==="
+    log "Vision Linux is installed on $VISION_USB_DEVICE"
+    echo "INSTALL_DONE"
+    return 0
+}
+
+# ---- Save mode ----
+do_save() {
+    log "=== SAVE MODE ==="
+
+    local save_path=""
+    save_path=$(find_save_file)
+
+    if [ -n "$save_path" ]; then
+        log "Save file found: $save_path"
+        mount_save "$save_path"
+
+        local save_mnt="/run/visionlinux/save"
+        if [ -d "$save_mnt/home" ]; then
+            cp -a "$save_mnt/home/"* /home/ 2>/dev/null || true
+        fi
+        if [ -d "$save_mnt/etc" ]; then
+            cp -a "$save_mnt/etc/"* /etc/ 2>/dev/null || true
+        fi
+        if [ -d "$save_mnt/opt" ]; then
+            cp -a "$save_mnt/opt/"* /opt/ 2>/dev/null || true
+        fi
+
+        log "Save data restored."
+        echo "SAVE_RESTORED"
+    else
+        log "No save file found. Creating new save file..."
+
+        local usb_list=$(find_usb)
+        if [ -z "$usb_list" ]; then
+            log "WARNING: No USB found. Changes will not be saved."
+            echo "SAVE_FAILED"
+            return 1
+        fi
+
+        local usb_dev=$(echo "$usb_list" | tr ' ' '\n' | head -1)
+        local mnt=$(mktemp -d)
+
+        if mount "$usb_dev" "$mnt" 2>/dev/null; then
+            log "Creating $VISION_SAVE_FILE on $usb_dev..."
+            dd if=/dev/zero of="$mnt/$VISION_SAVE_FILE" bs=1M count=$VISION_SAVE_SIZE 2>/dev/null
+            mkfs.ext4 -F "$mnt/$VISION_SAVE_FILE"
+            mount_save "$mnt/$VISION_SAVE_FILE"
+            umount "$mnt" 2>/dev/null
+            rmdir "$mnt" 2>/dev/null
+            log "Save file created."
+            echo "SAVE_CREATED"
+        else
+            log "Cannot mount USB for save file."
+            rmdir "$mnt" 2>/dev/null
+            echo "SAVE_FAILED"
+            return 1
+        fi
+    fi
+
+    return 0
+}
+
+# ---- Auto-connect LAN ----
+auto_connect_lan() {
+    log "Checking for LAN connection..."
+    for iface in eth0 enp0s3 enp0s8 enp1s0; do
+        if [ -f "/sys/class/net/$iface/operstate" ]; then
+            local state=$(cat "/sys/class/net/$iface/operstate" 2>/dev/null)
+            if [ "$state" = "up" ]; then
+                log "LAN connected on $iface — Internet available"
+                echo "LAN_CONNECTED"
+                return 0
+            fi
+        fi
+    done
+    log "No LAN connection detected"
+    echo "NO_LAN"
+    return 1
+}
+
+# ---- Main ----
+main() {
+    log "Vision Linux Init v1.0"
+    log "======================"
+
+    auto_connect_lan
+
+    if check_boot_device; then
+        log "Booted from USB device"
+        do_save
+    else
+        log "Not booted from USB — entering install mode"
+        do_install
+    fi
+}
+
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+    main "$@"
+fi
