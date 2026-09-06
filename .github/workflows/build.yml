@@ -38,10 +38,6 @@ jobs:
           chmod +x profiles/visionlinux/customize_airootfs.sh
           cp profiles/visionlinux/customize_airootfs.sh $A/root/
 
-      - name: Dump mkarchiso source
-        shell: bash
-        run: cat /usr/sbin/mkarchiso
-
       - name: Build ISO
         shell: bash
         run: mkarchiso -v -w work -o build profiles/visionlinux
