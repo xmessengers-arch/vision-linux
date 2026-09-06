@@ -40,7 +40,7 @@ jobs:
 
       - name: Build ISO
         shell: bash
-        run: mkarchiso -v -w work -o build profiles/visionlinux
+        run: mkarchiso -v -w "$(pwd)/work" -o "$(pwd)/build" "$(pwd)/profiles/visionlinux"
 
       - name: Upload ISO
         uses: actions/upload-artifact@v4
