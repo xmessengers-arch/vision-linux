@@ -1,6 +1,7 @@
 # Vision Linux archiso profile
 
 profile_archiso_version=80
+profile_type="baseline"
 
 iso_publisher="Vision Linux <team@visionlinux.dev>"
 iso_application="Vision Linux"
