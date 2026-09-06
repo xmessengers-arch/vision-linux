@@ -7,6 +7,8 @@ linux-lts
 linux-lts-headers
 firmware
 sudo
+mkinitcpio
+mkinitcpio-archiso
 
 # ---- File system tools ----
 dosfstools
@@ -25,6 +27,11 @@ python-gobject
 python-cryptography
 python-nacl
 
+# ---- Wayland compositor (for GUI apps via Shift+Tab) ----
+labwc
+wlr-randr
+xwayland
+
 # ---- GTK4 (for GUI: wi-fi, setup wizard) ----
 gtk4
 libadwaita
@@ -37,7 +44,9 @@ wpa_supplicant
 dhcpcd
 
 # ---- Bootloader ----
-limine
+syslinux
+systemd-boot
+efibootmgr
 
 # ---- System utilities ----
 bash-completion
